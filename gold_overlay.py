@@ -8,23 +8,27 @@ from tkinter import ttk, messagebox
 import threading
 import json
 import os
+import sys
 import urllib.request
 import urllib.error
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ========== 路径 ==========
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    SCRIPT_DIR = os.path.dirname(sys.executable)
+else:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "watchlist.json")
 
 # ========== 配置 ==========
-REFRESH_INTERVAL = 10
+REFRESH_INTERVAL = 5          # 刷新间隔(秒)
 MAX_WORKERS = 4
 FONT_PRICE = ("Microsoft YaHei", 18, "bold")
 FONT_LABEL = ("Microsoft YaHei", 10)
 FONT_SMALL = ("Microsoft YaHei", 9)
 FONT_TINY = ("Microsoft YaHei", 8)
-WINDOW_WIDTH = 200
+WINDOW_WIDTH = 248
 TITLE_HEIGHT = 26
 PADDING = 10
 BG = "#101018"
@@ -34,15 +38,17 @@ UP_CLR = "#00e676"
 DOWN_CLR = "#ff5252"
 GRAY_CLR = "#888899"
 TRANSPARENCY = 0.85
+BUY_SPREAD = 3             # 买入点差
+SELL_SPREAD = 2            # 卖出点差
 
 # ========== 默认自选列表 ==========
 DEFAULT_WATCHLIST = [
-    {"symbol": "nf_AU0",  "label": "积存金",  "unit": "元/克",  "type": "futures"},
+    {"symbol": "hf_XAU",  "label": "积存金",  "unit": "元/克",  "type": "forex"},
 ]
 
 # ========== 新浪数据解析 ==========
 
-SINA_URL = "https://hq.sinajs.cn/list={symbol}"
+SINA_URL = "https://hq.sinajs.cn/list={}"
 SINA_HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Referer": "https://finance.sina.com.cn"
@@ -51,10 +57,10 @@ SINA_HEADERS = {
 
 def fetch_raw(symbol):
     """获取新浪原始数据"""
-    url = SINA_URL.format(symbol=symbol)
+    url = SINA_URL.format(symbol)
     req = urllib.request.Request(url, headers=SINA_HEADERS)
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:
             text = resp.read().decode("gbk")
             if '"' not in text:
                 return None
@@ -141,24 +147,25 @@ def parse_any(parts, symbol, label, unit):
         # --- 国内期货 (nf_) 如沪金 ---
         # 数据格式: 品种名,时间,昨结算,最高,?,?,最新价,开盘,?,?,最低,...
         # 例: 黄金连续,150000,881.000,899.660,878.340,890.660,890.520,...
+        # 映射: [2]=最新价 [6]=昨收 [3]=最高
         if symbol.startswith("nf_"):
             p = parts
-            price = float(p[5]) if len(p) > 5 and p[5] else 0         # 最新价
-            prev_close = float(p[2]) if len(p) > 2 and p[2] else price # 昨结算
+            price = float(p[2]) if len(p) > 2 and p[2] else 0         # 最新价
+            prev_close = float(p[6]) if len(p) > 6 and p[6] else price # 昨收
             high = float(p[3]) if len(p) > 3 and p[3] else 0           # 最高
-            # 最低: 扫描找最小值
+            # 最低: 扫描 p[4]~p[10]
             low_val = 999999
-            for j in [4, 9, 10]:
+            for j in range(4, min(11, len(p))):
                 try:
-                    v = float(p[j]) if len(p) > j and p[j] else 0
+                    v = float(p[j])
                     if 0 < v < low_val:
                         low_val = v
                 except (ValueError, IndexError):
                     pass
             low = low_val if low_val < 999999 else 0
-            # 成交量: 找大数值
+            # 成交量
             volume = 0
-            for j in [8, 9, 12, 13]:
+            for j in [8, 12, 13]:
                 try:
                     v = float(p[j]) if len(p) > j and p[j] else 0
                     if v > 100 and volume == 0:
@@ -250,10 +257,17 @@ class TickerOverlay:
         self.running = True
         self._fetching_lock = threading.Lock()
         self._fetching = False
+        self._sell_price = 0      # 当前卖出价
+        self._init_done = False   # 初始化标记
 
         self._build_ui()
         self._bind_events()
         self._position_window(cfg.get("window_x", -1), cfg.get("window_y", -1))
+
+        # 恢复输入（初始化阶段不触发盈亏）
+        self.var_cost.set(str(cfg.get("cost_price", "")))
+        self.var_grams.set(str(cfg.get("grams", "")))
+        self._init_done = True
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(300, self.refresh_all)
@@ -262,8 +276,8 @@ class TickerOverlay:
         """定位窗口：优先使用保存的位置"""
         sw = self.root.winfo_screenwidth()
         n = len(self.watchlist)
-        h = TITLE_HEIGHT + n * 52 + PADDING + 4
-        h = max(h, 80)
+        h = TITLE_HEIGHT + n * 52 + PADDING + 4 + 86
+        h = max(h, 180)
         self.full_height = h
 
         if saved_x > 0 and saved_y > 0:
@@ -274,8 +288,8 @@ class TickerOverlay:
 
     def _recalc_height(self):
         n = len(self.watchlist)
-        h = TITLE_HEIGHT + n * 52 + PADDING + 4
-        h = max(h, 80)
+        h = TITLE_HEIGHT + n * 52 + PADDING + 4 + 86
+        h = max(h, 180)
         self.full_height = h
         self.root.geometry(f"{WINDOW_WIDTH}x{h}")
 
@@ -315,31 +329,51 @@ class TickerOverlay:
                                      font=FONT_SMALL, bg=BG, fg="#555555")
         self.loading_lbl.pack(pady=20)
 
+        # 盈亏区
+        self.pl_frame = tk.Frame(self.main_frame, bg=CARD_BG, padx=8, pady=4)
+        self.pl_frame.pack(fill=tk.X, pady=(0, 4))
+
+        r1 = tk.Frame(self.pl_frame, bg=CARD_BG)
+        r1.pack(fill=tk.X)
+        tk.Label(r1, text="成本", font=FONT_TINY, bg=CARD_BG, fg="#888888").pack(side=tk.LEFT)
+        self.var_cost = tk.StringVar()
+        self.var_cost.trace("w", lambda *a: self._on_input_change())
+        self.entry_cost = tk.Entry(r1, bg="#0a0a15", fg="#ffd700", insertbackground="#ffd700",
+                                    font=("Consolas", 9), width=8, justify=tk.RIGHT,
+                                    textvariable=self.var_cost)
+        self.entry_cost.pack(side=tk.LEFT, padx=4)
+        tk.Label(r1, text="元/克", font=FONT_TINY, bg=CARD_BG, fg="#666666").pack(side=tk.LEFT)
+
+        tk.Label(r1, text="克数", font=FONT_TINY, bg=CARD_BG, fg="#888888").pack(side=tk.LEFT, padx=(8, 0))
+        self.var_grams = tk.StringVar()
+        self.var_grams.trace("w", lambda *a: self._on_input_change())
+        self.entry_grams = tk.Entry(r1, bg="#0a0a15", fg="#ffd700", insertbackground="#ffd700",
+                                     font=("Consolas", 9), width=6, justify=tk.RIGHT,
+                                     textvariable=self.var_grams)
+        self.entry_grams.pack(side=tk.LEFT, padx=4)
+        tk.Label(r1, text="克", font=FONT_TINY, bg=CARD_BG, fg="#666666").pack(side=tk.LEFT)
+
+        # 盈亏显示
+        r2 = tk.Frame(self.pl_frame, bg=CARD_BG)
+        r2.pack(fill=tk.X, pady=(4, 0))
+        tk.Label(r2, text="盈亏", font=FONT_TINY, bg=CARD_BG, fg="#888888").pack(side=tk.LEFT)
+        self.lbl_pl = tk.Label(r2, text="—", font=("Microsoft YaHei", 11, "bold"),
+                               bg=CARD_BG, fg="#888888")
+        self.lbl_pl.pack(side=tk.LEFT, padx=6)
+
     def _bind_events(self):
         self.root.bind("<Button-3>", self._context_menu)
 
     def _start_drag(self, e):
-        self.drag_x, self.drag_y = e.x_root, e.y_root
+        self._drag_start_x = e.x_root
+        self._drag_start_y = e.y_root
+        self._drag_win_x = self.root.winfo_x()
+        self._drag_win_y = self.root.winfo_y()
 
     def _do_drag(self, e):
-        dx = e.x_root - self.drag_x
-        dy = e.y_root - self.drag_y
-        self.root.geometry(f"+{self.root.winfo_x() + dx}+{self.root.winfo_y() + dy}")
-        self.drag_x, self.drag_y = e.x_root, e.y_root
-
-    def _bind_events(self):
-        self.title_lbl.bind("<Button-1>", self._start_drag)
-        self.title_lbl.bind("<B1-Motion>", self._do_drag)
-        self.root.bind("<Button-3>", self._context_menu)
-
-    def _start_drag(self, e):
-        self.drag_x, self.drag_y = e.x, e.y
-
-    def _do_drag(self, e):
-        dx = e.x_root - self.drag_x
-        dy = e.y_root - self.drag_y
-        self.root.geometry(f"+{self.root.winfo_x() + dx}+{self.root.winfo_y() + dy}")
-        self.drag_x, self.drag_y = e.x_root, e.y_root
+        dx = e.x_root - self._drag_start_x
+        dy = e.y_root - self._drag_start_y
+        self.root.geometry(f"+{self._drag_win_x + dx}+{self._drag_win_y + dy}")
 
     def _context_menu(self, e):
         m = tk.Menu(self.root, tearoff=0, bg="#16213e", fg="#d0d0d0",
@@ -356,12 +390,13 @@ class TickerOverlay:
 
     def _on_close(self):
         self.running = False
-        # 保存窗口位置
         try:
             cfg = load_config()
             cfg["window_x"] = self.root.winfo_x()
             cfg["window_y"] = self.root.winfo_y()
             cfg["watchlist"] = self.watchlist
+            cfg["cost_price"] = self.entry_cost.get().strip()
+            cfg["grams"] = self.entry_grams.get().strip()
             save_config(cfg)
         except Exception:
             pass
@@ -385,40 +420,61 @@ class TickerOverlay:
         threading.Thread(target=self._fetch_all, daemon=True).start()
 
     def _fetch_all(self):
-        """并发拉取所有标的数据（去重符号）"""
-        # 去重：同符号只请求一次
-        unique_syms = {}
-        for item in self.watchlist:
-            sym = item["symbol"]
-            if sym not in unique_syms:
-                unique_syms[sym] = []
-            unique_syms[sym].append(item)
+        """并发拉取数据，自动换算伦敦金 USD/oz → RMB/克"""
+        try:
+            # 始终拉取汇率用于换算
+            syms_to_fetch = set(item["symbol"] for item in self.watchlist)
+            syms_to_fetch.add("USDCNY")
 
-        raw_data = {}  # symbol -> parts
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = {executor.submit(fetch_raw, sym): sym
-                       for sym in unique_syms}
-            for future in as_completed(futures):
-                sym = futures[future]
-                try:
-                    raw_data[sym] = future.result()
-                except Exception:
-                    raw_data[sym] = None
+            raw_data = {}
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                futures = {executor.submit(fetch_raw, sym): sym
+                           for sym in syms_to_fetch}
+                for future in as_completed(futures):
+                    sym = futures[future]
+                    try:
+                        raw_data[sym] = future.result()
+                    except Exception:
+                        raw_data[sym] = None
 
-        # 每个 watchlist 条目生成一条结果
-        results = []
-        for item in self.watchlist:
-            sym = item["symbol"]
-            parts = raw_data.get(sym)
-            if parts:
-                parsed = parse_any(parts, sym,
-                                   item.get("label", sym),
-                                   item.get("unit", ""))
-                if parsed:
-                    results.append(parsed)
+            # 解析汇率
+            usdcny_rate = 7.2  # fallback
+            usdcny_parts = raw_data.get("USDCNY")
+            if usdcny_parts:
+                usdcny_parsed = parse_any(usdcny_parts, "USDCNY", "", "")
+                if usdcny_parsed:
+                    usdcny_rate = usdcny_parsed.get("price", 7.2)
 
-        self.prices = results
-        self.root.after(0, self._update_display)
+            results = []
+            for item in self.watchlist:
+                sym = item["symbol"]
+                parts = raw_data.get(sym)
+                if parts:
+                    parsed = parse_any(parts, sym,
+                                       item.get("label", sym),
+                                       item.get("unit", ""))
+                    if parsed:
+                        # 伦敦金：换算 元/克，加银行点差
+                        if sym == "hf_XAU":
+                            mid = parsed["price"] * usdcny_rate / 31.1035
+                            mid_prev = parsed["prev_close"] * usdcny_rate / 31.1035
+                            parsed["buy"] = round(mid + BUY_SPREAD, 2)
+                            parsed["sell"] = round(mid - SELL_SPREAD, 2)
+                            parsed["price"] = round(mid, 2)
+                            parsed["prev_close"] = round(mid_prev, 2)
+                            parsed["change"] = round(mid - mid_prev, 2)
+                            parsed["change_pct"] = round(
+                                parsed["change"] / mid_prev * 100, 2
+                            ) if mid_prev else 0
+                            parsed["unit"] = "元/克"
+                        results.append(parsed)
+
+            self.prices = results
+        except Exception:
+            self.prices = []
+        finally:
+            # 无论如何都要回到主线程重置状态
+            self.root.after(0, self._update_display)
 
     # ---- UI 增量更新 ----
     def _update_display(self):
@@ -456,16 +512,24 @@ class TickerOverlay:
         self._fetching = False
         self._schedule_next()
 
+        # 更新盈亏：始终取第一条数据的卖出价
+        sell = 0
+        if self.prices:
+            sell = self.prices[0].get("sell", 0)
+        self._sell_price = sell
+        self._save_inputs()  # 首次成功拉取后存盘
+        self.root.after(100, self._update_pl)
+
     # ---- 卡片 key: 用 label（同名符号靠标签区分） ----
     def _card_key(self, d):
         return d.get("label", d.get("symbol", "?"))
 
     def _create_card_widgets(self, d):
-        """紧凑卡片：名称 + 价格涨跌"""
-        card = tk.Frame(self.card_frame, bg=CARD_BG, padx=8, pady=3)
+        """紧凑卡片：买/卖同行 + 涨跌"""
+        card = tk.Frame(self.card_frame, bg=CARD_BG, padx=8, pady=4)
         card.pack(fill=tk.X, pady=(0, 2))
 
-        # 行1: 银行名称 ｜ 涨跌幅
+        # 行1: 名称 | 涨跌
         r1 = tk.Frame(card, bg=CARD_BG)
         r1.pack(fill=tk.X)
         w_label = tk.Label(r1, text=d.get("label", ""), font=FONT_SMALL,
@@ -478,32 +542,35 @@ class TickerOverlay:
                             bg=CARD_BG, fg=change_clr)
         w_change.pack(side=tk.RIGHT)
 
-        # 行2: 价格 ｜ 单位
+        # 行2: 买入 ｜ 卖出
         r2 = tk.Frame(card, bg=CARD_BG)
         r2.pack(fill=tk.X)
-        price = d.get("price", 0)
-        price_str = f"{price:,.2f}" if isinstance(price, (int, float)) else "N/A"
-        w_price = tk.Label(r2, text=price_str, font=FONT_PRICE,
+        buy = d.get("buy", d.get("price", 0))
+        w_price = tk.Label(r2, text=f"{buy:,.2f}", font=FONT_PRICE,
                            bg=CARD_BG, fg=GOLD_CLR)
         w_price.pack(side=tk.LEFT)
-        w_unit = tk.Label(r2, text=d.get("unit", ""), font=FONT_TINY,
-                          bg=CARD_BG, fg="#555566")
-        w_unit.pack(side=tk.RIGHT, pady=(4, 0))
+        tk.Label(r2, text="买", font=FONT_TINY,
+                 bg=CARD_BG, fg="#886644").pack(side=tk.LEFT, padx=(2, 8))
+
+        sell = d.get("sell", 0)
+        w_sell = tk.Label(r2, text=f"{sell:,.2f}", font=("Microsoft YaHei", 12),
+                          bg=CARD_BG, fg="#aaaaaa")
+        w_sell.pack(side=tk.LEFT)
+        tk.Label(r2, text="卖  " + d.get("unit", ""), font=FONT_TINY,
+                 bg=CARD_BG, fg="#555566").pack(side=tk.LEFT, padx=(2, 0))
 
         return {
             "frame": card,
-            "label": w_label, "unit": w_unit,
-            "price": w_price, "change": w_change,
+            "label": w_label, "buy": w_price, "sell": w_sell,
+            "change": w_change,
         }
 
     def _update_card_widgets(self, widgets, d):
         widgets["label"].config(text=d.get("label", ""))
-        widgets["unit"].config(text=d.get("unit", ""))
-
-        price = d.get("price", 0)
-        price_str = f"{price:,.2f}" if isinstance(price, (int, float)) else "N/A"
-        widgets["price"].config(text=price_str)
-
+        buy = d.get("buy", d.get("price", 0))
+        widgets["buy"].config(text=f"{buy:,.2f}")
+        sell = d.get("sell", 0)
+        widgets["sell"].config(text=f"{sell:,.2f}")
         chg_txt, chg_clr = self._format_change(
             d.get("change"), d.get("change_pct"))
         widgets["change"].config(text=chg_txt, fg=chg_clr)
@@ -519,6 +586,44 @@ class TickerOverlay:
             ps = "+" if change_pct >= 0 else ""
             txt += f"  {ps}{change_pct:.2f}%"
         return txt, clr
+
+    # ---- 盈亏计算 ----
+    def _on_input_change(self):
+        """输入成本/克数时即时存盘 + 更新盈亏"""
+        if not self._init_done:
+            return
+        self._update_pl()
+        self._save_inputs()
+
+    def _save_inputs(self):
+        """即时持久化成本/克数"""
+        try:
+            cfg = load_config()
+            cfg["watchlist"] = cfg.get("watchlist", self.watchlist)
+            cfg["cost_price"] = self.var_cost.get().strip()
+            cfg["grams"] = self.var_grams.get().strip()
+            save_config(cfg)
+        except Exception:
+            pass
+
+    def _update_pl(self):
+        try:
+            cost = float(self.var_cost.get().strip())
+            grams = float(self.var_grams.get().strip())
+        except ValueError:
+            self.lbl_pl.config(text="—", fg="#888888")
+            return
+
+        if self._sell_price <= 0 or grams <= 0:
+            self.lbl_pl.config(text="等待金价...", fg="#888888")
+            return
+
+        pl = (self._sell_price - cost) * grams
+        pl_pct = (self._sell_price - cost) / cost * 100 if cost > 0 else 0
+        clr = UP_CLR if pl >= 0 else DOWN_CLR
+        sign = "+" if pl > 0 else ""
+        self.lbl_pl.config(
+            text=f"{sign}{pl:,.2f} 元  ({sign}{pl_pct:,.2f}%)", fg=clr)
 
     def run(self):
         self.root.mainloop()
