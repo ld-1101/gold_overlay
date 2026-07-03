@@ -358,10 +358,12 @@ class TickerOverlay:
         return max(h, 80)
 
     def _recalc_height(self):
-        h = self._calc_height()
-        self.full_height = h
-        w = self._win_width
-        self.root.geometry(f"{w}x{h}")
+        """仅首次自动计算；用户手动调整后保持固定尺寸"""
+        if self._win_height <= 0:
+            h = self._calc_height()
+            self.full_height = h
+            w = self._win_width
+            self.root.geometry(f"{w}x{h}")
 
     # ---- UI ----
     def _build_ui(self):
