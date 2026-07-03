@@ -309,6 +309,13 @@ class TickerOverlay:
         self._show_cards = cfg.get("show_cards", True)
         self._show_pl = cfg.get("show_pl", True)
         self._show_ds = cfg.get("show_ds", True)
+        # 窗口尺寸（默认 WINDOW_WIDTH × 自动高度，用户可拖拽调整）
+        self._win_width = cfg.get("window_width", WINDOW_WIDTH)
+        self._win_height = cfg.get("window_height", 0)  # 0 = 自动计算
+        # 拖拽状态
+        self._resizing = False
+        self._resize_start_x = self._resize_start_y = 0
+        self._resize_win_w = self._resize_win_h = 0
 
         self._build_ui()
         self._bind_events()
@@ -325,16 +332,17 @@ class TickerOverlay:
         self._update_clock()  # ★ 改动2C：启动时钟
 
     def _position_window(self, saved_x=-1, saved_y=-1):
-        """定位窗口：优先使用保存的位置"""
+        """定位窗口：优先使用保存的位置和尺寸"""
         sw = self.root.winfo_screenwidth()
-        h = self._calc_height()
+        w = self._win_width
+        h = self._win_height if self._win_height > 0 else self._calc_height()
         self.full_height = h
 
         if saved_x > 0 and saved_y > 0:
             x, y = saved_x, saved_y
         else:
-            x, y = sw - WINDOW_WIDTH - 16, 80
-        self.root.geometry(f"{WINDOW_WIDTH}x{h}+{x}+{y}")
+            x, y = sw - w - 16, 80
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
 
     def _calc_height(self):
         """根据可见模块计算窗口高度"""
@@ -352,7 +360,8 @@ class TickerOverlay:
     def _recalc_height(self):
         h = self._calc_height()
         self.full_height = h
-        self.root.geometry(f"{WINDOW_WIDTH}x{h}")
+        w = self._win_width
+        self.root.geometry(f"{w}x{h}")
 
     # ---- UI ----
     def _build_ui(self):
@@ -442,6 +451,48 @@ class TickerOverlay:
         if not self._show_ds:
             self.ds_frame.pack_forget()
 
+        # 右下角拖拽手柄
+        self._grip = tk.Label(self.main_frame, text="⤡", font=("Microsoft YaHei", 8),
+                              bg=BG, fg="#444455", cursor="size_nw_se")
+        self._grip.place(relx=1.0, rely=1.0, anchor="se", x=-2, y=-2)
+        self._grip.bind("<Button-1>", self._start_resize)
+        self._grip.bind("<B1-Motion>", self._do_resize)
+        self._grip.bind("<ButtonRelease-1>", self._end_resize)
+
+    # ---- 窗口缩放 ----
+    def _start_resize(self, e):
+        self._resizing = True
+        self._resize_start_x = e.x_root
+        self._resize_start_y = e.y_root
+        self._resize_win_w = self.root.winfo_width()
+        self._resize_win_h = self.root.winfo_height()
+
+    def _do_resize(self, e):
+        if not self._resizing:
+            return
+        dw = e.x_root - self._resize_start_x
+        dh = e.y_root - self._resize_start_y
+        new_w = max(180, self._resize_win_w + dw)
+        new_h = max(60, self._resize_win_h + dh)
+        x = self.root.winfo_x()
+        y = self.root.winfo_y()
+        self.root.geometry(f"{new_w}x{new_h}+{x}+{y}")
+
+    def _end_resize(self, e):
+        self._resizing = False
+        self._win_width = self.root.winfo_width()
+        self._win_height = self.root.winfo_height()
+        self._save_dimensions()
+
+    def _save_dimensions(self):
+        try:
+            cfg = load_config()
+            cfg["window_width"] = self._win_width
+            cfg["window_height"] = self._win_height
+            save_config(cfg)
+        except Exception:
+            pass
+
     def _bind_events(self):
         self.root.bind("<Button-3>", self._context_menu)
 
@@ -524,6 +575,8 @@ class TickerOverlay:
             cfg = load_config()
             cfg["window_x"] = self.root.winfo_x()
             cfg["window_y"] = self.root.winfo_y()
+            cfg["window_width"] = self.root.winfo_width()
+            cfg["window_height"] = self.root.winfo_height()
             cfg["watchlist"] = self.watchlist
             cfg["cost_price"] = self.entry_cost.get().strip()
             cfg["grams"] = self.entry_grams.get().strip()
