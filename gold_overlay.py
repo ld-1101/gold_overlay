@@ -31,16 +31,21 @@ FONT_TINY = ("Microsoft YaHei", 8)
 WINDOW_WIDTH = 248
 TITLE_HEIGHT = 26
 PADDING = 10
-BG = "#101018"
-CARD_BG = "#1a1a28"
-GOLD_CLR = "#ffd700"
-# ★ 改动1：红涨绿跌
-UP_CLR = "#ff5252"     # 红=涨
-DOWN_CLR = "#00e676"   # 绿=跌
+# ── 玻璃卡片配色 ──
+TRANSPARENT_COLOR = "#010101"  # 透明标记色
+BG = TRANSPARENT_COLOR
+CARD_BG = "#FFFFFF"            # 卡片白
+CARD_INNER = "#F5F5FA"         # 卡片内部
+GOLD_CLR = "#b8860b"           # 暗金
+UP_CLR = "#d32f2f"             # 红涨
+DOWN_CLR = "#2e7d32"           # 绿跌
 GRAY_CLR = "#888899"
-TRANSPARENCY = 0.85
-BUY_SPREAD = 3             # 买入点差
-SELL_SPREAD = 2            # 卖出点差
+TEXT_PRIMARY = "#1a1a2e"       # 主文字
+TEXT_SECONDARY = "#6b6b80"     # 次要文字
+TEXT_HINT = "#a0a0b0"          # 提示文字
+TRANSPARENCY = 0.70            # 窗口透明度
+BUY_SPREAD = 3                 # 买入点差
+SELL_SPREAD = 2                # 卖出点差
 
 # ========== DeepSeek 余额查询 ==========
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
@@ -287,6 +292,7 @@ class TickerOverlay:
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         self.root.attributes("-alpha", TRANSPARENCY)
+        self.root.attributes("-transparentcolor", TRANSPARENT_COLOR)
         self.root.configure(bg=BG)
 
         cfg = load_config()
@@ -346,15 +352,15 @@ class TickerOverlay:
 
     def _calc_height(self):
         """根据可见模块计算窗口高度"""
-        h = TITLE_HEIGHT  # 标题栏
+        h = TITLE_HEIGHT + 6  # 标题栏 + 上边距
         if self._show_cards:
             n = len(self.watchlist)
-            h += n * 52 + PADDING  # 金价卡片
+            h += n * 56 + PADDING  # 金价卡片
         if self._show_pl:
-            h += 72  # 盈亏区（成本 + 克数 + 结果）
+            h += 80  # 盈亏卡片
         if self._show_ds:
-            h += 36  # DeepSeek 余额
-        h += 12  # 底部留白
+            h += 44  # DeepSeek 卡片
+        h += 16  # 底部留白
         return max(h, 80)
 
     def _recalc_height(self):
@@ -370,27 +376,26 @@ class TickerOverlay:
         self.main_frame = tk.Frame(self.root, bg=BG)
         self.main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # 标题栏：可拖拽 + 关闭按钮
+        # 标题栏卡片
         tb = tk.Frame(self.main_frame, bg=CARD_BG, height=TITLE_HEIGHT)
-        tb.pack(fill=tk.X)
+        tb.pack(fill=tk.X, padx=6, pady=(6, 0))
         tb.pack_propagate(False)
 
         self.title_lbl = tk.Label(tb, text="万能弹窗", font=("Microsoft YaHei", 9, "bold"),
                                   bg=CARD_BG, fg=GOLD_CLR)
         self.title_lbl.pack(side=tk.LEFT, padx=(8, 0), pady=(3, 0))
 
-        # ★ 改动2A：时钟
         self.clock_lbl = tk.Label(tb, text="", font=("Consolas", 9),
-                                  bg=CARD_BG, fg="#888888")
+                                  bg=CARD_BG, fg=TEXT_HINT)
         self.clock_lbl.pack(side=tk.RIGHT, padx=(0, 8), pady=(3, 0))
 
         # ✕ 关闭
         close_btn = tk.Label(tb, text="✕", font=("Microsoft YaHei", 9),
-                             bg=CARD_BG, fg="#885555", cursor="hand2")
+                             bg=CARD_BG, fg="#cc8888", cursor="hand2")
         close_btn.pack(side=tk.RIGHT, padx=(0, 6), pady=(3, 0))
         close_btn.bind("<Button-1>", lambda e: self._on_close())
-        close_btn.bind("<Enter>", lambda e: close_btn.configure(fg="#ff5252"))
-        close_btn.bind("<Leave>", lambda e: close_btn.configure(fg="#885555"))
+        close_btn.bind("<Enter>", lambda e: close_btn.configure(fg=UP_CLR))
+        close_btn.bind("<Leave>", lambda e: close_btn.configure(fg="#cc8888"))
 
         # 整个标题栏可拖拽
         for w in (tb, self.title_lbl):
@@ -398,51 +403,51 @@ class TickerOverlay:
             w.bind("<B1-Motion>", self._do_drag)
             w.configure(cursor="fleur")
 
-        # 卡片区
-        self.card_frame = tk.Frame(self.main_frame, bg=BG, padx=8, pady=4)
+        # 卡片区（透明背景，卡片自身带白色底）
+        self.card_frame = tk.Frame(self.main_frame, bg=BG, padx=6, pady=2)
         self.card_frame.pack(fill=tk.BOTH, expand=True)
 
         self.loading_lbl = tk.Label(self.card_frame, text="⏳ 加载中...",
-                                     font=FONT_SMALL, bg=BG, fg="#555555")
+                                     font=FONT_SMALL, bg=BG, fg=TEXT_HINT)
         self.loading_lbl.pack(pady=20)
 
-        # 盈亏区
-        self.pl_frame = tk.Frame(self.main_frame, bg=CARD_BG, padx=8, pady=4)
-        self.pl_frame.pack(fill=tk.X, pady=(0, 4))
+        # 盈亏卡片
+        self.pl_frame = tk.Frame(self.main_frame, bg=CARD_BG, padx=8, pady=6)
+        self.pl_frame.pack(fill=tk.X, padx=6, pady=(0, 4))
 
         r1 = tk.Frame(self.pl_frame, bg=CARD_BG)
         r1.pack(fill=tk.X)
-        tk.Label(r1, text="成本", font=FONT_TINY, bg=CARD_BG, fg="#888888").pack(side=tk.LEFT)
+        tk.Label(r1, text="成本", font=FONT_TINY, bg=CARD_BG, fg=TEXT_SECONDARY).pack(side=tk.LEFT)
         self.var_cost = tk.StringVar()
         self.var_cost.trace("w", lambda *a: self._on_input_change())
-        self.entry_cost = tk.Entry(r1, bg="#0a0a15", fg="#ffd700", insertbackground="#ffd700",
+        self.entry_cost = tk.Entry(r1, bg=CARD_INNER, fg=TEXT_PRIMARY, insertbackground=GOLD_CLR,
                                     font=("Consolas", 9), width=8, justify=tk.RIGHT,
-                                    textvariable=self.var_cost)
+                                    textvariable=self.var_cost, relief=tk.FLAT)
         self.entry_cost.pack(side=tk.LEFT, padx=4)
-        tk.Label(r1, text="元/克", font=FONT_TINY, bg=CARD_BG, fg="#666666").pack(side=tk.LEFT)
+        tk.Label(r1, text="元/克", font=FONT_TINY, bg=CARD_BG, fg=TEXT_HINT).pack(side=tk.LEFT)
 
-        tk.Label(r1, text="克数", font=FONT_TINY, bg=CARD_BG, fg="#888888").pack(side=tk.LEFT, padx=(8, 0))
+        tk.Label(r1, text="克数", font=FONT_TINY, bg=CARD_BG, fg=TEXT_SECONDARY).pack(side=tk.LEFT, padx=(8, 0))
         self.var_grams = tk.StringVar()
         self.var_grams.trace("w", lambda *a: self._on_input_change())
-        self.entry_grams = tk.Entry(r1, bg="#0a0a15", fg="#ffd700", insertbackground="#ffd700",
+        self.entry_grams = tk.Entry(r1, bg=CARD_INNER, fg=TEXT_PRIMARY, insertbackground=GOLD_CLR,
                                      font=("Consolas", 9), width=6, justify=tk.RIGHT,
-                                     textvariable=self.var_grams)
+                                     textvariable=self.var_grams, relief=tk.FLAT)
         self.entry_grams.pack(side=tk.LEFT, padx=4)
-        tk.Label(r1, text="克", font=FONT_TINY, bg=CARD_BG, fg="#666666").pack(side=tk.LEFT)
+        tk.Label(r1, text="克", font=FONT_TINY, bg=CARD_BG, fg=TEXT_HINT).pack(side=tk.LEFT)
 
         # 盈亏显示
         r2 = tk.Frame(self.pl_frame, bg=CARD_BG)
         r2.pack(fill=tk.X, pady=(4, 0))
-        tk.Label(r2, text="盈亏", font=FONT_TINY, bg=CARD_BG, fg="#888888").pack(side=tk.LEFT)
+        tk.Label(r2, text="盈亏", font=FONT_TINY, bg=CARD_BG, fg=TEXT_SECONDARY).pack(side=tk.LEFT)
         self.lbl_pl = tk.Label(r2, text="—", font=("Microsoft YaHei", 11, "bold"),
-                               bg=CARD_BG, fg="#888888")
+                               bg=CARD_BG, fg=TEXT_SECONDARY)
         self.lbl_pl.pack(side=tk.LEFT, padx=6)
 
-        # DeepSeek 余额（独立 frame，挂 main_frame 下，可单独隐藏）
-        self.ds_frame = tk.Frame(self.main_frame, bg=CARD_BG, padx=8, pady=2)
-        self.ds_frame.pack(fill=tk.X, pady=(4, 0))
+        # DeepSeek 卡片
+        self.ds_frame = tk.Frame(self.main_frame, bg=CARD_BG, padx=10, pady=4)
+        self.ds_frame.pack(fill=tk.X, padx=6, pady=(0, 6))
         self.lbl_ds = tk.Label(self.ds_frame, text="DeepSeek 查询中...", font=("Microsoft YaHei", 9),
-                               bg=CARD_BG, fg="#888888")
+                               bg=CARD_BG, fg=TEXT_SECONDARY)
         self.lbl_ds.pack(side=tk.LEFT)
 
         # 按配置显示/隐藏模块
@@ -455,7 +460,7 @@ class TickerOverlay:
 
         # 右下角拖拽手柄
         self._grip = tk.Label(self.main_frame, text="⤡", font=("Microsoft YaHei", 8),
-                              bg=BG, fg="#444455", cursor="size_nw_se")
+                              bg=BG, fg=TEXT_HINT, cursor="size_nw_se")
         self._grip.place(relx=1.0, rely=1.0, anchor="se", x=-2, y=-2)
         self._grip.bind("<Button-1>", self._start_resize)
         self._grip.bind("<B1-Motion>", self._do_resize)
@@ -510,8 +515,8 @@ class TickerOverlay:
         self.root.geometry(f"+{self._drag_win_x + dx}+{self._drag_win_y + dy}")
 
     def _context_menu(self, e):
-        m = tk.Menu(self.root, tearoff=0, bg="#16213e", fg="#d0d0d0",
-                    activebackground="#0f3460")
+        m = tk.Menu(self.root, tearoff=0, bg="#ffffff", fg=TEXT_PRIMARY,
+                    activebackground="#e8e8f0", activeforeground=TEXT_PRIMARY)
         m.add_command(label="🔄 刷新行情", command=self.refresh_all)
         m.add_command(label="💎 刷新 DeepSeek 余额", command=self._refresh_balance)
         m.add_separator()
@@ -556,9 +561,9 @@ class TickerOverlay:
         if self._show_cards:
             self.card_frame.pack(fill=tk.BOTH, expand=True)
         if self._show_pl:
-            self.pl_frame.pack(fill=tk.X, pady=(0, 4))
+            self.pl_frame.pack(fill=tk.X, padx=6, pady=(0, 4))
         if self._show_ds:
-            self.ds_frame.pack(fill=tk.X, pady=(4, 0))
+            self.ds_frame.pack(fill=tk.X, padx=6, pady=(0, 6))
         self._recalc_height()
 
     def _save_visibility(self):
@@ -713,15 +718,15 @@ class TickerOverlay:
         return d.get("label", d.get("symbol", "?"))
 
     def _create_card_widgets(self, d):
-        """紧凑卡片：买/卖同行 + 涨跌"""
-        card = tk.Frame(self.card_frame, bg=CARD_BG, padx=8, pady=4)
-        card.pack(fill=tk.X, pady=(0, 2))
+        """玻璃卡片：买/卖同行 + 涨跌"""
+        card = tk.Frame(self.card_frame, bg=CARD_BG, padx=10, pady=4)
+        card.pack(fill=tk.X, pady=(0, 4), padx=2)
 
         # 行1: 名称 | 涨跌
         r1 = tk.Frame(card, bg=CARD_BG)
         r1.pack(fill=tk.X)
         w_label = tk.Label(r1, text=d.get("label", ""), font=FONT_SMALL,
-                           bg=CARD_BG, fg="#cccccc")
+                           bg=CARD_BG, fg=TEXT_PRIMARY)
         w_label.pack(side=tk.LEFT)
 
         change_txt, change_clr = self._format_change(
@@ -738,14 +743,14 @@ class TickerOverlay:
                            bg=CARD_BG, fg=GOLD_CLR)
         w_price.pack(side=tk.LEFT)
         tk.Label(r2, text="买", font=FONT_TINY,
-                 bg=CARD_BG, fg="#886644").pack(side=tk.LEFT, padx=(2, 8))
+                 bg=CARD_BG, fg=TEXT_HINT).pack(side=tk.LEFT, padx=(2, 8))
 
         sell = d.get("sell", 0)
         w_sell = tk.Label(r2, text=f"{sell:,.2f}", font=("Microsoft YaHei", 12),
-                          bg=CARD_BG, fg="#aaaaaa")
+                          bg=CARD_BG, fg=TEXT_SECONDARY)
         w_sell.pack(side=tk.LEFT)
         tk.Label(r2, text="卖  " + d.get("unit", ""), font=FONT_TINY,
-                 bg=CARD_BG, fg="#555566").pack(side=tk.LEFT, padx=(2, 0))
+                 bg=CARD_BG, fg=TEXT_HINT).pack(side=tk.LEFT, padx=(2, 0))
 
         return {
             "frame": card,
@@ -799,11 +804,11 @@ class TickerOverlay:
             cost = float(self.var_cost.get().strip())
             grams = float(self.var_grams.get().strip())
         except ValueError:
-            self.lbl_pl.config(text="—", fg="#888888")
+            self.lbl_pl.config(text="—", fg=TEXT_SECONDARY)
             return
 
         if self._sell_price <= 0 or grams <= 0:
-            self.lbl_pl.config(text="等待金价...", fg="#888888")
+            self.lbl_pl.config(text="等待金价...", fg=TEXT_SECONDARY)
             return
 
         pl = (self._sell_price - cost) * grams
@@ -830,7 +835,7 @@ class TickerOverlay:
     def _update_balance(self, txt, ok):
         self._ds_balance = txt
         self._ds_ok = ok
-        self.lbl_ds.config(text=txt, fg="#00e676" if ok else "#ff5252")
+        self.lbl_ds.config(text=txt, fg=DOWN_CLR if ok else UP_CLR)
         # 每 5 分钟刷新一次余额
         if self.running:
             self.root.after(300000, self._refresh_balance)
@@ -851,7 +856,7 @@ class SettingsWindow:
         self.win = tk.Toplevel(parent.root)
         self.win.title("⭐ 自选管理")
         self.win.geometry("420x420")
-        self.win.configure(bg="#1a1a2e")
+        self.win.configure(bg="#f0f0f5")
         self.win.attributes("-topmost", True)
         self.win.resizable(False, False)
 
@@ -869,23 +874,23 @@ class SettingsWindow:
         pad = {"padx": 12, "pady": 6}
 
         # 标题
-        hdr = tk.Frame(self.win, bg="#1a1a2e")
+        hdr = tk.Frame(self.win, bg="#f0f0f5")
         hdr.pack(fill=tk.X, **pad)
         tk.Label(hdr, text="⭐ 自选列表管理", font=("Microsoft YaHei", 13, "bold"),
-                 bg="#1a1a2e", fg="#ffd700").pack(side=tk.LEFT)
+                 bg="#f0f0f5", fg=GOLD_CLR).pack(side=tk.LEFT)
         tk.Label(hdr, text="双击删除 | 右键清空",
-                 font=("Microsoft YaHei", 8), bg="#1a1a2e", fg="#555555").pack(side=tk.RIGHT)
+                 font=("Microsoft YaHei", 8), bg="#f0f0f5", fg=TEXT_HINT).pack(side=tk.RIGHT)
 
         # 列表
-        list_frame = tk.Frame(self.win, bg="#1a1a2e")
+        list_frame = tk.Frame(self.win, bg="#f0f0f5")
         list_frame.pack(fill=tk.BOTH, expand=True, **pad)
 
         scrollbar = tk.Scrollbar(list_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set,
-                                   bg="#0f0f1a", fg="#d0d0d0",
-                                   selectbackground="#0f3460",
+                                   bg="#ffffff", fg=TEXT_PRIMARY,
+                                   selectbackground="#e0e0f0",
                                    font=("Microsoft YaHei", 10),
                                    activestyle="none",
                                    height=14)
@@ -900,49 +905,49 @@ class SettingsWindow:
         self.listbox.bind("<Button-3>", lambda e: self._clear_all())
 
         # 添加区
-        add_frame = tk.LabelFrame(self.win, text="➕ 添加自选", bg="#1a1a2e",
-                                   fg="#aaaaaa", font=("Microsoft YaHei", 9))
+        add_frame = tk.LabelFrame(self.win, text="➕ 添加自选", bg="#f0f0f5",
+                                   fg=TEXT_SECONDARY, font=("Microsoft YaHei", 9))
         add_frame.pack(fill=tk.X, **pad)
 
-        row1 = tk.Frame(add_frame, bg="#1a1a2e")
+        row1 = tk.Frame(add_frame, bg="#f0f0f5")
         row1.pack(fill=tk.X, pady=2)
         tk.Label(row1, text="代码:", font=("Microsoft YaHei", 9),
-                 bg="#1a1a2e", fg="#888888").pack(side=tk.LEFT)
-        self.entry_symbol = tk.Entry(row1, bg="#0f0f1a", fg="#ffffff",
-                                      insertbackground="#ffffff",
-                                      font=("Consolas", 10), width=14)
+                 bg="#f0f0f5", fg=TEXT_SECONDARY).pack(side=tk.LEFT)
+        self.entry_symbol = tk.Entry(row1, bg="#ffffff", fg=TEXT_PRIMARY,
+                                      insertbackground=GOLD_CLR,
+                                      font=("Consolas", 10), width=14, relief=tk.FLAT)
         self.entry_symbol.pack(side=tk.LEFT, padx=(4, 12))
 
         tk.Label(row1, text="名称:", font=("Microsoft YaHei", 9),
-                 bg="#1a1a2e", fg="#888888").pack(side=tk.LEFT)
-        self.entry_label = tk.Entry(row1, bg="#0f0f1a", fg="#ffffff",
-                                     insertbackground="#ffffff",
-                                     font=("Microsoft YaHei", 10), width=12)
+                 bg="#f0f0f5", fg=TEXT_SECONDARY).pack(side=tk.LEFT)
+        self.entry_label = tk.Entry(row1, bg="#ffffff", fg=TEXT_PRIMARY,
+                                     insertbackground=GOLD_CLR,
+                                     font=("Microsoft YaHei", 10), width=12, relief=tk.FLAT)
         self.entry_label.pack(side=tk.LEFT, padx=4)
 
         # 快捷代码提示
-        row2 = tk.Frame(add_frame, bg="#1a1a2e")
+        row2 = tk.Frame(add_frame, bg="#f0f0f5")
         row2.pack(fill=tk.X, pady=(0, 4))
         tk.Label(row2, text="单位:", font=("Microsoft YaHei", 9),
-                 bg="#1a1a2e", fg="#888888").pack(side=tk.LEFT)
-        self.entry_unit = tk.Entry(row2, bg="#0f0f1a", fg="#ffffff",
-                                    insertbackground="#ffffff",
-                                    font=("Microsoft YaHei", 10), width=8)
+                 bg="#f0f0f5", fg=TEXT_SECONDARY).pack(side=tk.LEFT)
+        self.entry_unit = tk.Entry(row2, bg="#ffffff", fg=TEXT_PRIMARY,
+                                    insertbackground=GOLD_CLR,
+                                    font=("Microsoft YaHei", 10), width=8, relief=tk.FLAT)
         self.entry_unit.pack(side=tk.LEFT, padx=4)
         self.entry_unit.insert(0, "元")
 
-        add_btn = tk.Button(row2, text="✅ 添加", bg="#0f3460", fg="#ffffff",
+        add_btn = tk.Button(row2, text="✅ 添加", bg=GOLD_CLR, fg="#ffffff",
                             font=("Microsoft YaHei", 9), padx=8, pady=1,
-                            activebackground="#1a5276", relief=tk.FLAT,
+                            activebackground="#c7940a", relief=tk.FLAT,
                             cursor="hand2",
                             command=self._add_symbol)
         add_btn.pack(side=tk.RIGHT, padx=(4, 0))
 
         # 快速模板
-        tip_frame = tk.Frame(add_frame, bg="#1a1a2e")
+        tip_frame = tk.Frame(add_frame, bg="#f0f0f5")
         tip_frame.pack(fill=tk.X, pady=(4, 2))
         tk.Label(tip_frame, text="快捷:", font=("Microsoft YaHei", 8),
-                 bg="#1a1a2e", fg="#555555").pack(side=tk.LEFT)
+                 bg="#f0f0f5", fg=TEXT_HINT).pack(side=tk.LEFT)
 
         quick_items = [
             ("黄金", "nf_AU0", "积存金"),
@@ -957,22 +962,22 @@ class SettingsWindow:
         ]
         for cat, sym, name in quick_items[:5]:  # 显示5个最常用的
             t = tk.Label(tip_frame, text=f" {name}", font=("Microsoft YaHei", 8),
-                         bg="#1a1a2e", fg="#4499cc", cursor="hand2")
+                         bg="#f0f0f5", fg="#3355aa", cursor="hand2")
             t.pack(side=tk.LEFT, padx=(2, 0))
             t.bind("<Button-1>", lambda e, s=sym, n=name: self._quick_fill(s, n))
-            t.bind("<Enter>", lambda e, lb=t: lb.configure(fg="#66bbff"))
-            t.bind("<Leave>", lambda e, lb=t: lb.configure(fg="#4499cc"))
+            t.bind("<Enter>", lambda e, lb=t: lb.configure(fg="#5577cc"))
+            t.bind("<Leave>", lambda e, lb=t: lb.configure(fg="#3355aa"))
 
         # 底部按钮
-        btm = tk.Frame(self.win, bg="#1a1a2e")
+        btm = tk.Frame(self.win, bg="#f0f0f5")
         btm.pack(fill=tk.X, **pad)
-        tk.Button(btm, text="🔄 重置默认", bg="#333344", fg="#aaaaaa",
+        tk.Button(btm, text="🔄 重置默认", bg="#e0e0ea", fg=TEXT_SECONDARY,
                   font=("Microsoft YaHei", 9), padx=8,
-                  activebackground="#444466", relief=tk.FLAT, cursor="hand2",
+                  activebackground="#d0d0da", relief=tk.FLAT, cursor="hand2",
                   command=self._reset_default).pack(side=tk.LEFT)
-        tk.Button(btm, text="💾 保存并刷新", bg="#0f3460", fg="#ffffff",
+        tk.Button(btm, text="💾 保存并刷新", bg=GOLD_CLR, fg="#ffffff",
                   font=("Microsoft YaHei", 9, "bold"), padx=12,
-                  activebackground="#1a5276", relief=tk.FLAT, cursor="hand2",
+                  activebackground="#c7940a", relief=tk.FLAT, cursor="hand2",
                   command=self._save_and_close).pack(side=tk.RIGHT)
 
         # 绑定回车键
