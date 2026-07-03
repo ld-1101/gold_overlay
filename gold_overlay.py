@@ -49,21 +49,47 @@ SELL_SPREAD = 2                # 卖出点差
 
 # ========== DeepSeek 余额查询 ==========
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
+DS_HISTORY_FILE = os.path.join(SCRIPT_DIR, "ds_history.json")
 
 
-def fetch_deepseek_balance():
-    """查询 DeepSeek API 余额，返回 (余额字符串, 是否成功)"""
-    # 优先从 os.environ 读取，兜底从注册表读取（解决子进程不继承的问题）
-    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-    if not api_key:
+def _get_api_key():
+    """优先 os.environ，兜底注册表"""
+    key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not key:
         try:
             import winreg
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
-                api_key, _ = winreg.QueryValueEx(k, "DEEPSEEK_API_KEY")
+                key, _ = winreg.QueryValueEx(k, "DEEPSEEK_API_KEY")
         except Exception:
             pass
+    return key
+
+
+def load_ds_history():
+    """加载余额历史"""
+    if os.path.exists(DS_HISTORY_FILE):
+        try:
+            with open(DS_HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"records": [], "today_start": 0, "today_date": ""}
+
+
+def save_ds_history(data):
+    """保存余额历史"""
+    try:
+        with open(DS_HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def fetch_deepseek_balance():
+    """查询 DeepSeek API 余额，返回 {balance,total_used,currency,ok,error}"""
+    api_key = _get_api_key()
     if not api_key:
-        return "未设置 DEEPSEEK_API_KEY", False
+        return {"ok": False, "error": "未设置 DEEPSEEK_API_KEY"}
     try:
         req = urllib.request.Request(
             DEEPSEEK_BALANCE_URL,
@@ -76,19 +102,67 @@ def fetch_deepseek_balance():
             data = json.loads(resp.read().decode("utf-8"))
             if data.get("is_available") and data.get("balance_infos"):
                 for info in data["balance_infos"]:
-                    currency = info.get("currency", "")
-                    total = info.get("total_balance", "0")
+                    balance = float(info.get("total_balance", 0))
                     topped = float(info.get("topped_up_balance", 0))
                     granted = float(info.get("granted_balance", 0))
-                    used = topped + granted - float(total)
-                    return f"{currency} ¥{float(total):.2f} 已用¥{used:.2f}", True
-            return "无余额数据", False
+                    total_used = round(topped + granted - balance, 2)
+                    return {
+                        "ok": True,
+                        "balance": round(balance, 2),
+                        "total_used": total_used,
+                        "currency": info.get("currency", ""),
+                        "error": ""
+                    }
+            return {"ok": False, "error": "无余额数据"}
     except urllib.error.HTTPError as e:
         if e.code == 401:
-            return "Key 无效 (401)", False
-        return f"请求失败 HTTP {e.code}", False
-    except Exception as e:
-        return f"网络错误", False
+            return {"ok": False, "error": "Key 无效 (401)"}
+        return {"ok": False, "error": f"请求失败 HTTP {e.code}"}
+    except Exception:
+        return {"ok": False, "error": "网络错误"}
+
+
+def calc_daily_usage(balance, total_used):
+    """计算当日用量：对比历史记录中的今日起始余额"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    hist = load_ds_history()
+
+    # 新的一天：重置
+    if hist.get("today_date") != today:
+        hist["today_date"] = today
+        hist["today_start"] = balance
+        hist["records"] = hist.get("records", [])[-29:]  # 保留最近30天
+
+    start = hist.get("today_start", balance)
+    # 如果当前余额比起始高（可能是充值），重置起始值
+    if balance > start:
+        hist["today_start"] = balance
+        start = balance
+
+    today_used = round(start - balance, 2)
+    if today_used < 0:
+        today_used = 0
+
+    # 记录今天摘要
+    found = False
+    for r in hist.get("records", []):
+        if r.get("date") == today:
+            r["end_balance"] = balance
+            r["today_used"] = today_used
+            r["total_used"] = total_used
+            found = True
+            break
+    if not found:
+        hist["records"].append({
+            "date": today,
+            "start_balance": start,
+            "end_balance": balance,
+            "today_used": today_used,
+            "total_used": total_used
+        })
+
+    save_ds_history(hist)
+    return today_used, total_used, hist
 
 # ========== 默认自选列表 ==========
 DEFAULT_WATCHLIST = [
@@ -359,7 +433,7 @@ class TickerOverlay:
         if self._show_pl:
             h += 80  # 盈亏卡片
         if self._show_ds:
-            h += 44  # DeepSeek 卡片
+            h += 52  # DeepSeek 卡片（双行）
         h += 16  # 底部留白
         return max(h, 80)
 
@@ -443,12 +517,15 @@ class TickerOverlay:
                                bg=CARD_BG, fg=TEXT_SECONDARY)
         self.lbl_pl.pack(side=tk.LEFT, padx=6)
 
-        # DeepSeek 卡片
+        # DeepSeek 卡片（双行）
         self.ds_frame = tk.Frame(self.main_frame, bg=CARD_BG, padx=10, pady=4)
         self.ds_frame.pack(fill=tk.X, padx=6, pady=(0, 6))
-        self.lbl_ds = tk.Label(self.ds_frame, text="DeepSeek 查询中...", font=("Microsoft YaHei", 9),
-                               bg=CARD_BG, fg=TEXT_SECONDARY)
-        self.lbl_ds.pack(side=tk.LEFT)
+        self.lbl_ds_bal = tk.Label(self.ds_frame, text="DeepSeek 查询中...", font=("Microsoft YaHei", 9, "bold"),
+                                    bg=CARD_BG, fg=TEXT_PRIMARY)
+        self.lbl_ds_bal.pack(side=tk.LEFT)
+        self.lbl_ds_used = tk.Label(self.ds_frame, text="", font=("Microsoft YaHei", 8),
+                                     bg=CARD_BG, fg=TEXT_HINT)
+        self.lbl_ds_used.pack(side=tk.RIGHT)
 
         # 按配置显示/隐藏模块
         if not self._show_cards:
@@ -828,15 +905,31 @@ class TickerOverlay:
     def _refresh_balance(self):
         """在子线程查询余额，主线程更新 UI"""
         def _fetch():
-            txt, ok = fetch_deepseek_balance()
-            self.root.after(0, lambda: self._update_balance(txt, ok))
+            result = fetch_deepseek_balance()
+            self.root.after(0, lambda: self._update_balance(result))
         threading.Thread(target=_fetch, daemon=True).start()
 
-    def _update_balance(self, txt, ok):
-        self._ds_balance = txt
-        self._ds_ok = ok
-        self.lbl_ds.config(text=txt, fg=DOWN_CLR if ok else UP_CLR)
-        # 每 5 分钟刷新一次余额
+    def _update_balance(self, result):
+        if not result.get("ok"):
+            err = result.get("error", "查询失败")
+            self.lbl_ds_bal.config(text=err, fg=UP_CLR)
+            self.lbl_ds_used.config(text="")
+            self._ds_ok = False
+        else:
+            balance = result["balance"]
+            currency = result["currency"]
+            today_used, total_used, _ = calc_daily_usage(balance, result["total_used"])
+            self.lbl_ds_bal.config(
+                text=f"{currency} ¥{balance:.2f}",
+                fg=TEXT_PRIMARY)
+            parts = []
+            if today_used > 0:
+                parts.append(f"今日 ¥{today_used:.2f}")
+            if total_used > 0:
+                parts.append(f"累计 ¥{total_used:.2f}")
+            self.lbl_ds_used.config(text="  |  ".join(parts), fg=TEXT_HINT)
+            self._ds_ok = True
+        # 每 5 分钟刷新
         if self.running:
             self.root.after(300000, self._refresh_balance)
 

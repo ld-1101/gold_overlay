@@ -8,3 +8,4 @@ dist/
 *.exe
 # 用户运行时数据（保留模板，本地修改不提交）
 watchlist.json
+ds_history.json
