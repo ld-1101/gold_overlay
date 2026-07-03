@@ -34,16 +34,60 @@ PADDING = 10
 BG = "#101018"
 CARD_BG = "#1a1a28"
 GOLD_CLR = "#ffd700"
-UP_CLR = "#00e676"
-DOWN_CLR = "#ff5252"
+# ★ 改动1：红涨绿跌
+UP_CLR = "#ff5252"     # 红=涨
+DOWN_CLR = "#00e676"   # 绿=跌
 GRAY_CLR = "#888899"
 TRANSPARENCY = 0.85
 BUY_SPREAD = 3             # 买入点差
 SELL_SPREAD = 2            # 卖出点差
 
+# ========== DeepSeek 余额查询 ==========
+DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
+
+
+def fetch_deepseek_balance():
+    """查询 DeepSeek API 余额，返回 (余额字符串, 是否成功)"""
+    # 优先从 os.environ 读取，兜底从注册表读取（解决子进程不继承的问题）
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not api_key:
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
+                api_key, _ = winreg.QueryValueEx(k, "DEEPSEEK_API_KEY")
+        except Exception:
+            pass
+    if not api_key:
+        return "未设置 DEEPSEEK_API_KEY", False
+    try:
+        req = urllib.request.Request(
+            DEEPSEEK_BALANCE_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "User-Agent": "Mozilla/5.0"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("is_available") and data.get("balance_infos"):
+                for info in data["balance_infos"]:
+                    currency = info.get("currency", "")
+                    total = info.get("total_balance", "0")
+                    topped = float(info.get("topped_up_balance", 0))
+                    granted = float(info.get("granted_balance", 0))
+                    used = topped + granted - float(total)
+                    return f"{currency} ¥{float(total):.2f} 已用¥{used:.2f}", True
+            return "无余额数据", False
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return "Key 无效 (401)", False
+        return f"请求失败 HTTP {e.code}", False
+    except Exception as e:
+        return f"网络错误", False
+
 # ========== 默认自选列表 ==========
 DEFAULT_WATCHLIST = [
-    {"symbol": "hf_XAU",  "label": "积存金",  "unit": "元/克",  "type": "forex"},
+    {"symbol": "hf_XAU",  "label": "国际金价",  "unit": "元/克",  "type": "forex"},
 ]
 
 # ========== 新浪数据解析 ==========
@@ -239,7 +283,7 @@ def save_config(config):
 class TickerOverlay:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("积存金")
+        self.root.title("万能弹窗")
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         self.root.attributes("-alpha", TRANSPARENCY)
@@ -259,6 +303,12 @@ class TickerOverlay:
         self._fetching = False
         self._sell_price = 0      # 当前卖出价
         self._init_done = False   # 初始化标记
+        self._ds_balance = ""     # DeepSeek 余额
+        self._ds_ok = False       # DeepSeek 余额获取成功
+        # 模块可见性（从配置恢复，默认全部显示）
+        self._show_cards = cfg.get("show_cards", True)
+        self._show_pl = cfg.get("show_pl", True)
+        self._show_ds = cfg.get("show_ds", True)
 
         self._build_ui()
         self._bind_events()
@@ -271,13 +321,13 @@ class TickerOverlay:
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(300, self.refresh_all)
+        self.root.after(500, self._refresh_balance)
+        self._update_clock()  # ★ 改动2C：启动时钟
 
     def _position_window(self, saved_x=-1, saved_y=-1):
         """定位窗口：优先使用保存的位置"""
         sw = self.root.winfo_screenwidth()
-        n = len(self.watchlist)
-        h = TITLE_HEIGHT + n * 52 + PADDING + 4 + 86
-        h = max(h, 180)
+        h = self._calc_height()
         self.full_height = h
 
         if saved_x > 0 and saved_y > 0:
@@ -286,10 +336,21 @@ class TickerOverlay:
             x, y = sw - WINDOW_WIDTH - 16, 80
         self.root.geometry(f"{WINDOW_WIDTH}x{h}+{x}+{y}")
 
+    def _calc_height(self):
+        """根据可见模块计算窗口高度"""
+        h = TITLE_HEIGHT  # 标题栏
+        if self._show_cards:
+            n = len(self.watchlist)
+            h += n * 52 + PADDING  # 金价卡片
+        if self._show_pl:
+            h += 72  # 盈亏区（成本 + 克数 + 结果）
+        if self._show_ds:
+            h += 36  # DeepSeek 余额
+        h += 12  # 底部留白
+        return max(h, 80)
+
     def _recalc_height(self):
-        n = len(self.watchlist)
-        h = TITLE_HEIGHT + n * 52 + PADDING + 4 + 86
-        h = max(h, 180)
+        h = self._calc_height()
         self.full_height = h
         self.root.geometry(f"{WINDOW_WIDTH}x{h}")
 
@@ -303,9 +364,14 @@ class TickerOverlay:
         tb.pack(fill=tk.X)
         tb.pack_propagate(False)
 
-        self.title_lbl = tk.Label(tb, text="积存金", font=("Microsoft YaHei", 9, "bold"),
+        self.title_lbl = tk.Label(tb, text="万能弹窗", font=("Microsoft YaHei", 9, "bold"),
                                   bg=CARD_BG, fg=GOLD_CLR)
         self.title_lbl.pack(side=tk.LEFT, padx=(8, 0), pady=(3, 0))
+
+        # ★ 改动2A：时钟
+        self.clock_lbl = tk.Label(tb, text="", font=("Consolas", 9),
+                                  bg=CARD_BG, fg="#888888")
+        self.clock_lbl.pack(side=tk.RIGHT, padx=(0, 8), pady=(3, 0))
 
         # ✕ 关闭
         close_btn = tk.Label(tb, text="✕", font=("Microsoft YaHei", 9),
@@ -361,6 +427,21 @@ class TickerOverlay:
                                bg=CARD_BG, fg="#888888")
         self.lbl_pl.pack(side=tk.LEFT, padx=6)
 
+        # DeepSeek 余额（独立 frame，挂 main_frame 下，可单独隐藏）
+        self.ds_frame = tk.Frame(self.main_frame, bg=CARD_BG, padx=8, pady=2)
+        self.ds_frame.pack(fill=tk.X, pady=(4, 0))
+        self.lbl_ds = tk.Label(self.ds_frame, text="DeepSeek 查询中...", font=("Microsoft YaHei", 9),
+                               bg=CARD_BG, fg="#888888")
+        self.lbl_ds.pack(side=tk.LEFT)
+
+        # 按配置显示/隐藏模块
+        if not self._show_cards:
+            self.card_frame.pack_forget()
+        if not self._show_pl:
+            self.pl_frame.pack_forget()
+        if not self._show_ds:
+            self.ds_frame.pack_forget()
+
     def _bind_events(self):
         self.root.bind("<Button-3>", self._context_menu)
 
@@ -378,15 +459,64 @@ class TickerOverlay:
     def _context_menu(self, e):
         m = tk.Menu(self.root, tearoff=0, bg="#16213e", fg="#d0d0d0",
                     activebackground="#0f3460")
-        m.add_command(label="🔄 刷新", command=self.refresh_all)
+        m.add_command(label="🔄 刷新行情", command=self.refresh_all)
+        m.add_command(label="💎 刷新 DeepSeek 余额", command=self._refresh_balance)
+        m.add_separator()
+        # 模块显示切换
+        c = "✅" if self._show_cards else "⬜"
+        m.add_command(label=f"{c} 金价卡片", command=self._toggle_cards)
+        c = "✅" if self._show_pl else "⬜"
+        m.add_command(label=f"{c} 盈亏计算", command=self._toggle_pl)
+        c = "✅" if self._show_ds else "⬜"
+        m.add_command(label=f"{c} DeepSeek", command=self._toggle_ds)
+        m.add_separator()
         t = self.root.attributes("-topmost")
         m.add_command(label=f"{'✅' if t else '⬜'} 置顶", command=self._toggle_topmost)
+        m.add_command(label="⭐ 自选管理", command=self._open_settings)
         m.add_separator()
         m.add_command(label="❌ 退出", command=self._on_close)
         m.post(e.x_root, e.y_root)
 
+    # ---- 模块切换 ----
     def _toggle_topmost(self):
         self.root.attributes("-topmost", not self.root.attributes("-topmost"))
+
+    def _toggle_cards(self):
+        self._show_cards = not self._show_cards
+        self._reorder_frames()
+        self._save_visibility()
+
+    def _toggle_pl(self):
+        self._show_pl = not self._show_pl
+        self._reorder_frames()
+        self._save_visibility()
+
+    def _toggle_ds(self):
+        self._show_ds = not self._show_ds
+        self._reorder_frames()
+        self._save_visibility()
+
+    def _reorder_frames(self):
+        """确保 frame 排列顺序：card_frame → pl_frame → ds_frame"""
+        for f in (self.card_frame, self.pl_frame, self.ds_frame):
+            f.pack_forget()
+        if self._show_cards:
+            self.card_frame.pack(fill=tk.BOTH, expand=True)
+        if self._show_pl:
+            self.pl_frame.pack(fill=tk.X, pady=(0, 4))
+        if self._show_ds:
+            self.ds_frame.pack(fill=tk.X, pady=(4, 0))
+        self._recalc_height()
+
+    def _save_visibility(self):
+        try:
+            cfg = load_config()
+            cfg["show_cards"] = self._show_cards
+            cfg["show_pl"] = self._show_pl
+            cfg["show_ds"] = self._show_ds
+            save_config(cfg)
+        except Exception:
+            pass
 
     def _on_close(self):
         self.running = False
@@ -397,6 +527,9 @@ class TickerOverlay:
             cfg["watchlist"] = self.watchlist
             cfg["cost_price"] = self.entry_cost.get().strip()
             cfg["grams"] = self.entry_grams.get().strip()
+            cfg["show_cards"] = self._show_cards
+            cfg["show_pl"] = self._show_pl
+            cfg["show_ds"] = self._show_ds
             save_config(cfg)
         except Exception:
             pass
@@ -624,6 +757,28 @@ class TickerOverlay:
         sign = "+" if pl > 0 else ""
         self.lbl_pl.config(
             text=f"{sign}{pl:,.2f} 元  ({sign}{pl_pct:,.2f}%)", fg=clr)
+
+    # ★ 改动2B：时钟更新方法
+    def _update_clock(self):
+        now = datetime.now().strftime("%H:%M:%S")
+        self.clock_lbl.config(text=now)
+        self.root.after(1000, self._update_clock)
+
+    # ---- DeepSeek 余额 ----
+    def _refresh_balance(self):
+        """在子线程查询余额，主线程更新 UI"""
+        def _fetch():
+            txt, ok = fetch_deepseek_balance()
+            self.root.after(0, lambda: self._update_balance(txt, ok))
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _update_balance(self, txt, ok):
+        self._ds_balance = txt
+        self._ds_ok = ok
+        self.lbl_ds.config(text=txt, fg="#00e676" if ok else "#ff5252")
+        # 每 5 分钟刷新一次余额
+        if self.running:
+            self.root.after(300000, self._refresh_balance)
 
     def run(self):
         self.root.mainloop()

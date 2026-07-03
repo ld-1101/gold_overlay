@@ -1,13 +1,13 @@
 @echo off
 chcp 65001 >nul 2>&1
-title 积存金
+title 万能弹窗
 cd /d "%~dp0"
 echo.
-echo   🏅 积存金行情悬浮窗
-echo   ─────────────────
-echo   招商积存金  |  浙商积存金
-echo   右键 ⭐ 可管理自选列表
+echo   🪟 万能弹窗
+echo   ─────────────
+echo   国际金价 | DeepSeek 余额 | 盈亏计算
+echo   右键可切换模块显示
 echo.
-start "" "%~dp0积存金.exe"
+start "" "%~dp0万能弹窗.exe"
 timeout /t 1 >nul
 exit
