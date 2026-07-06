@@ -24,26 +24,26 @@ CONFIG_FILE = os.path.join(SCRIPT_DIR, "watchlist.json")
 # ========== 配置 ==========
 REFRESH_INTERVAL = 5          # 刷新间隔(秒)
 MAX_WORKERS = 4
-FONT_PRICE = ("Microsoft YaHei", 18, "bold")
+FONT_PRICE = ("Microsoft YaHei", 16, "bold")
 FONT_LABEL = ("Microsoft YaHei", 10)
 FONT_SMALL = ("Microsoft YaHei", 9)
 FONT_TINY = ("Microsoft YaHei", 8)
-WINDOW_WIDTH = 200
+WINDOW_WIDTH = 250
 TITLE_HEIGHT = 26
 PADDING = 10
-# ── 玻璃卡片配色 ──
+# ── 暗色主题 ──
 TRANSPARENT_COLOR = "#010101"  # 透明标记色
 BG = TRANSPARENT_COLOR
-CARD_BG = "#FFFFFF"            # 卡片白
-CARD_INNER = "#F5F5FA"         # 卡片内部
-GOLD_CLR = "#b8860b"           # 暗金
-UP_CLR = "#d32f2f"             # 红涨
-DOWN_CLR = "#2e7d32"           # 绿跌
-GRAY_CLR = "#888899"
-TEXT_PRIMARY = "#1a1a2e"       # 主文字
-TEXT_SECONDARY = "#6b6b80"     # 次要文字
-TEXT_HINT = "#a0a0b0"          # 提示文字
-TRANSPARENCY = 0.70            # 窗口透明度
+CARD_BG = "#1a1a28"            # 深色卡片
+CARD_INNER = "#141420"         # 卡片内部
+GOLD_CLR = "#ffd700"           # 亮金
+UP_CLR = "#ff5252"             # 红涨
+DOWN_CLR = "#00e676"           # 绿跌
+GRAY_CLR = "#666688"
+TEXT_PRIMARY = "#d0d0d0"       # 主文字
+TEXT_SECONDARY = "#9090a0"     # 次要文字
+TEXT_HINT = "#555566"          # 提示文字
+TRANSPARENCY = 0.85            # 窗口透明度
 BUY_SPREAD = 0                # 买入点差
 SELL_SPREAD = 0            # 卖出点差
 
@@ -389,13 +389,6 @@ class TickerOverlay:
         self._show_cards = cfg.get("show_cards", True)
         self._show_pl = cfg.get("show_pl", True)
         self._show_ds = cfg.get("show_ds", True)
-        # 窗口尺寸（默认 WINDOW_WIDTH × 自动高度，用户可拖拽调整）
-        self._win_width = cfg.get("window_width", WINDOW_WIDTH)
-        self._win_height = cfg.get("window_height", 0)  # 0 = 自动计算
-        # 拖拽状态
-        self._resizing = False
-        self._resize_start_x = self._resize_start_y = 0
-        self._resize_win_w = self._resize_win_h = 0
 
         self._build_ui()
         self._bind_events()
@@ -412,10 +405,10 @@ class TickerOverlay:
         self._update_clock()  # ★ 改动2C：启动时钟
 
     def _position_window(self, saved_x=-1, saved_y=-1):
-        """定位窗口：优先使用保存的位置和尺寸"""
+        """定位窗口"""
         sw = self.root.winfo_screenwidth()
-        w = self._win_width
-        h = self._win_height if self._win_height > 0 else self._calc_height()
+        w = WINDOW_WIDTH
+        h = self._calc_height()
         self.full_height = h
 
         if saved_x > 0 and saved_y > 0:
@@ -429,21 +422,19 @@ class TickerOverlay:
         h = TITLE_HEIGHT + 6  # 标题栏 + 上边距
         if self._show_cards:
             n = len(self.watchlist)
-            h += n * 56 + PADDING  # 金价卡片
+            h += n * 52 + PADDING
         if self._show_pl:
-            h += 80  # 盈亏卡片
+            h += 82
         if self._show_ds:
-            h += 52  # DeepSeek 卡片（双行）
-        h += 16  # 底部留白
+            h += 56
+        h += 12
         return max(h, 80)
 
     def _recalc_height(self):
-        """仅首次自动计算；用户手动调整后保持固定尺寸"""
-        if self._win_height <= 0:
-            h = self._calc_height()
-            self.full_height = h
-            w = self._win_width
-            self.root.geometry(f"{w}x{h}")
+        """根据内容自适应高度"""
+        h = self._calc_height()
+        self.full_height = h
+        self.root.geometry(f"{WINDOW_WIDTH}x{h}")
 
     # ---- UI ----
     def _build_ui(self):
@@ -477,9 +468,9 @@ class TickerOverlay:
             w.bind("<B1-Motion>", self._do_drag)
             w.configure(cursor="fleur")
 
-        # 卡片区（透明背景，卡片自身带白色底）
+        # 卡片区
         self.card_frame = tk.Frame(self.main_frame, bg=BG, padx=6, pady=2)
-        self.card_frame.pack(fill=tk.BOTH, expand=True)
+        self.card_frame.pack(fill=tk.X)
 
         self.loading_lbl = tk.Label(self.card_frame, text="⏳ 加载中...",
                                      font=FONT_SMALL, bg=BG, fg=TEXT_HINT)
@@ -487,7 +478,7 @@ class TickerOverlay:
 
         # 盈亏卡片
         self.pl_frame = tk.Frame(self.main_frame, bg=CARD_BG, padx=8, pady=6)
-        self.pl_frame.pack(fill=tk.X, padx=6, pady=(0, 4))
+        self.pl_frame.pack(fill=tk.X, padx=6, pady=(3, 3))
 
         r1 = tk.Frame(self.pl_frame, bg=CARD_BG)
         r1.pack(fill=tk.X)
@@ -517,9 +508,9 @@ class TickerOverlay:
                                bg=CARD_BG, fg=TEXT_SECONDARY)
         self.lbl_pl.pack(side=tk.LEFT, padx=6)
 
-        # DeepSeek 卡片（双行）
-        self.ds_frame = tk.Frame(self.main_frame, bg=CARD_BG, padx=10, pady=4)
-        self.ds_frame.pack(fill=tk.X, padx=6, pady=(0, 6))
+        # DeepSeek 卡片
+        self.ds_frame = tk.Frame(self.main_frame, bg=CARD_BG, padx=10, pady=6)
+        self.ds_frame.pack(fill=tk.X, padx=6, pady=(3, 6))
         self.lbl_ds_bal = tk.Label(self.ds_frame, text="DeepSeek 查询中...", font=("Microsoft YaHei", 9, "bold"),
                                     bg=CARD_BG, fg=TEXT_PRIMARY)
         self.lbl_ds_bal.pack(side=tk.LEFT)
@@ -534,48 +525,6 @@ class TickerOverlay:
             self.pl_frame.pack_forget()
         if not self._show_ds:
             self.ds_frame.pack_forget()
-
-        # 右下角拖拽手柄
-        self._grip = tk.Label(self.main_frame, text="⤡", font=("Microsoft YaHei", 8),
-                              bg=BG, fg=TEXT_HINT, cursor="size_nw_se")
-        self._grip.place(relx=1.0, rely=1.0, anchor="se", x=-2, y=-2)
-        self._grip.bind("<Button-1>", self._start_resize)
-        self._grip.bind("<B1-Motion>", self._do_resize)
-        self._grip.bind("<ButtonRelease-1>", self._end_resize)
-
-    # ---- 窗口缩放 ----
-    def _start_resize(self, e):
-        self._resizing = True
-        self._resize_start_x = e.x_root
-        self._resize_start_y = e.y_root
-        self._resize_win_w = self.root.winfo_width()
-        self._resize_win_h = self.root.winfo_height()
-
-    def _do_resize(self, e):
-        if not self._resizing:
-            return
-        dw = e.x_root - self._resize_start_x
-        dh = e.y_root - self._resize_start_y
-        new_w = max(180, self._resize_win_w + dw)
-        new_h = max(60, self._resize_win_h + dh)
-        x = self.root.winfo_x()
-        y = self.root.winfo_y()
-        self.root.geometry(f"{new_w}x{new_h}+{x}+{y}")
-
-    def _end_resize(self, e):
-        self._resizing = False
-        self._win_width = self.root.winfo_width()
-        self._win_height = self.root.winfo_height()
-        self._save_dimensions()
-
-    def _save_dimensions(self):
-        try:
-            cfg = load_config()
-            cfg["window_width"] = self._win_width
-            cfg["window_height"] = self._win_height
-            save_config(cfg)
-        except Exception:
-            pass
 
     def _bind_events(self):
         self.root.bind("<Button-3>", self._context_menu)
