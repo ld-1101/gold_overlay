@@ -28,7 +28,7 @@ FONT_PRICE = ("Microsoft YaHei", 18, "bold")
 FONT_LABEL = ("Microsoft YaHei", 10)
 FONT_SMALL = ("Microsoft YaHei", 9)
 FONT_TINY = ("Microsoft YaHei", 8)
-WINDOW_WIDTH = 248
+WINDOW_WIDTH = 200
 TITLE_HEIGHT = 26
 PADDING = 10
 # ── 玻璃卡片配色 ──
@@ -44,8 +44,8 @@ TEXT_PRIMARY = "#1a1a2e"       # 主文字
 TEXT_SECONDARY = "#6b6b80"     # 次要文字
 TEXT_HINT = "#a0a0b0"          # 提示文字
 TRANSPARENCY = 0.70            # 窗口透明度
-BUY_SPREAD = 3                 # 买入点差
-SELL_SPREAD = 2                # 卖出点差
+BUY_SPREAD = 0                # 买入点差
+SELL_SPREAD = 0            # 卖出点差
 
 # ========== DeepSeek 余额查询 ==========
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
@@ -724,19 +724,18 @@ class TickerOverlay:
                                        item.get("label", sym),
                                        item.get("unit", ""))
                     if parsed:
-                        # 伦敦金：换算 元/克，加银行点差
+                        # 伦敦金：换算 元/克
                         if sym == "hf_XAU":
-                            mid = parsed["price"] * usdcny_rate / 31.1035
+                            usd = parsed["price"]
+                            mid = usd * usdcny_rate / 31.1035
                             mid_prev = parsed["prev_close"] * usdcny_rate / 31.1035
-                            parsed["buy"] = round(mid + BUY_SPREAD, 2)
-                            parsed["sell"] = round(mid - SELL_SPREAD, 2)
+                            parsed["usd"] = round(usd, 2)
                             parsed["price"] = round(mid, 2)
                             parsed["prev_close"] = round(mid_prev, 2)
                             parsed["change"] = round(mid - mid_prev, 2)
                             parsed["change_pct"] = round(
                                 parsed["change"] / mid_prev * 100, 2
                             ) if mid_prev else 0
-                            parsed["unit"] = "元/克"
                         results.append(parsed)
 
             self.prices = results
@@ -782,12 +781,10 @@ class TickerOverlay:
         self._fetching = False
         self._schedule_next()
 
-        # 更新盈亏：始终取第一条数据的卖出价
-        sell = 0
+        # 更新盈亏：取当前实价
         if self.prices:
-            sell = self.prices[0].get("sell", 0)
-        self._sell_price = sell
-        self._save_inputs()  # 首次成功拉取后存盘
+            self._sell_price = self.prices[0].get("price", 0)
+        self._save_inputs()
         self.root.after(100, self._update_pl)
 
     # ---- 卡片 key: 用 label（同名符号靠标签区分） ----
@@ -795,55 +792,23 @@ class TickerOverlay:
         return d.get("label", d.get("symbol", "?"))
 
     def _create_card_widgets(self, d):
-        """玻璃卡片：买/卖同行 + 涨跌"""
+        """极简卡片：USD | RMB"""
         card = tk.Frame(self.card_frame, bg=CARD_BG, padx=10, pady=4)
         card.pack(fill=tk.X, pady=(0, 4), padx=2)
 
-        # 行1: 名称 | 涨跌
-        r1 = tk.Frame(card, bg=CARD_BG)
-        r1.pack(fill=tk.X)
-        w_label = tk.Label(r1, text=d.get("label", ""), font=FONT_SMALL,
-                           bg=CARD_BG, fg=TEXT_PRIMARY)
-        w_label.pack(side=tk.LEFT)
+        usd = d.get("usd", d.get("price", 0))
+        rmb = d.get("price", 0)
+        txt = f"{usd:,.2f}  |  {rmb:,.2f}"
+        w_main = tk.Label(card, text=txt, font=FONT_PRICE,
+                          bg=CARD_BG, fg=GOLD_CLR)
+        w_main.pack()
 
-        change_txt, change_clr = self._format_change(
-            d.get("change"), d.get("change_pct"))
-        w_change = tk.Label(r1, text=change_txt, font=FONT_TINY,
-                            bg=CARD_BG, fg=change_clr)
-        w_change.pack(side=tk.RIGHT)
-
-        # 行2: 买入 ｜ 卖出
-        r2 = tk.Frame(card, bg=CARD_BG)
-        r2.pack(fill=tk.X)
-        buy = d.get("buy", d.get("price", 0))
-        w_price = tk.Label(r2, text=f"{buy:,.2f}", font=FONT_PRICE,
-                           bg=CARD_BG, fg=GOLD_CLR)
-        w_price.pack(side=tk.LEFT)
-        tk.Label(r2, text="买", font=FONT_TINY,
-                 bg=CARD_BG, fg=TEXT_HINT).pack(side=tk.LEFT, padx=(2, 8))
-
-        sell = d.get("sell", 0)
-        w_sell = tk.Label(r2, text=f"{sell:,.2f}", font=("Microsoft YaHei", 12),
-                          bg=CARD_BG, fg=TEXT_SECONDARY)
-        w_sell.pack(side=tk.LEFT)
-        tk.Label(r2, text="卖  " + d.get("unit", ""), font=FONT_TINY,
-                 bg=CARD_BG, fg=TEXT_HINT).pack(side=tk.LEFT, padx=(2, 0))
-
-        return {
-            "frame": card,
-            "label": w_label, "buy": w_price, "sell": w_sell,
-            "change": w_change,
-        }
+        return {"frame": card, "main": w_main}
 
     def _update_card_widgets(self, widgets, d):
-        widgets["label"].config(text=d.get("label", ""))
-        buy = d.get("buy", d.get("price", 0))
-        widgets["buy"].config(text=f"{buy:,.2f}")
-        sell = d.get("sell", 0)
-        widgets["sell"].config(text=f"{sell:,.2f}")
-        chg_txt, chg_clr = self._format_change(
-            d.get("change"), d.get("change_pct"))
-        widgets["change"].config(text=chg_txt, fg=chg_clr)
+        usd = d.get("usd", d.get("price", 0))
+        rmb = d.get("price", 0)
+        widgets["main"].config(text=f"{usd:,.2f}  |  {rmb:,.2f}")
 
     @staticmethod
     def _format_change(change, change_pct):
